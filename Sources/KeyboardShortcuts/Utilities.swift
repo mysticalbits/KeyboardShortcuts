@@ -115,28 +115,21 @@ final class RunLoopLocalEventMonitor {
 	) {
 		self.runLoopMode = runLoopMode
 		self.callback = callback
-		let handledEventTypes = events.rawValue
 		var pendingEvents = [NSEvent]()
 
 		self.observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeSources.rawValue, true, 0) { _, _ in
-			// Pull all events from the queue and handle the ones matching the given types.
-			// Non-matching events are left untouched, maintaining their order in the queue.
+			// Pull only the events matching the given types from the queue and handle them.
+			// Other events are never dequeued, so they keep their place in the queue. Dequeuing a mouse event makes AppKit hit-test the windows under the pointer, so dequeuing and reposting every event on every run loop pass lagged open menus whenever anything else (an animation, a timer) woke the run loop.
 			pendingEvents.removeAll(keepingCapacity: true)
 
-			// Retrieve all events from the event queue to preserve their order (instead of using the `matching` parameter).
-			while let event = NSApp.nextEvent(matching: .any, until: nil, inMode: runLoopMode, dequeue: true) {
+			while let event = NSApp.nextEvent(matching: events, until: nil, inMode: runLoopMode, dequeue: true) {
 				pendingEvents.append(event)
 			}
 
-			// Iterate over the gathered events, instead of doing it directly in the `while` loop, to avoid potential infinite loops caused by re-retrieving undiscarded events.
+			// Iterate over the gathered events, instead of doing it directly in the `while` loop, to avoid potential infinite loops caused by re-retrieving reposted events.
+			// Unhandled events keep their order among themselves, but go back behind any other events still in the queue.
 			for eventToHandle in pendingEvents {
-				let handledEvent = if handledEventTypes & (1 << eventToHandle.type.rawValue) == 0 {
-					eventToHandle
-				} else {
-					callback(eventToHandle)
-				}
-
-				guard let handledEvent else {
+				guard let handledEvent = callback(eventToHandle) else {
 					continue
 				}
 
